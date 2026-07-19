@@ -1,17 +1,34 @@
-# cozylife_control
+# CozyLife Control 
+CozyLife Control es una aplicación desarrollada en **Flutter** diseñada para el control avanzado de iluminación inteligente mediante el protocolo **JSON sobre TCP**. A diferencia de las apps comerciales estándar, esta solución permite una automatización profunda y transiciones de iluminación personalizadas.
 
-A new Flutter project.
+---
 
-## Getting Started
+## Características Principales
 
-This project is a starting point for a Flutter application.
+- **Control TCP Directo:** Comunicación bidireccional de baja latencia con dispositivos en el puerto `5555`.
+- **Efectos de Amanecer y Atardecer:** Algoritmo dinámico que ajusta el brillo y la temperatura de color de forma imperceptible basándose en intervalos de tiempo programables (ej. transiciones suaves de 2 horas).
+- **Modo Solar (GPS):** Integración con cálculos astronómicos para sincronizar las luces con la salida y puesta del sol real según la ubicación del usuario.
+- **Servicio en Primer Plano (Foreground Service):** Optimizado para **Android 16** (POCO F7 Ultra), permitiendo que los horarios se ejecuten de manera confiable incluso cuando la aplicación está cerrada o la pantalla bloqueada.
+- **Persistencia Local:** Gestión de dispositivos y configuraciones mediante `SharedPreferences`.
 
-A few resources to get you started if this is your first Flutter project:
+## Stack Tecnológico
 
-- [Learn Flutter](https://docs.flutter.dev/get-started/learn-flutter)
-- [Write your first Flutter app](https://docs.flutter.dev/get-started/codelab)
-- [Flutter learning resources](https://docs.flutter.dev/reference/learning-resources)
+- **Framework:** Flutter (Dart)
+- **Comunicación:** Sockets TCP (Protocolo Raw JSON)
+- **Arquitectura:** Gestión de estado nativa y servicios desacoplados para lógica de red (`BulbClient`).
+- **Seguridad de Hardware:** Implementación de bloqueos de voltaje mínimo (brillo min 50) para prevenir el apagado físico de los componentes electrónicos del foco.
 
-For help getting started with Flutter development, view the
-[online documentation](https://docs.flutter.dev/), which offers tutorials,
-samples, guidance on mobile development, and a full API reference.
+## Estado del Proyecto
+
+Actualmente, la aplicación es totalmente funcional para el control manual, por horarios y por efectos solares. 
+
+**Próximos pasos en desarrollo:**
+- [ ] **Integración de Comandos de Voz:** Implementación de reconocimiento de voz determinista para control manos libres mediante `speech_to_text`.
+- [ ] **Optimización de Parser:** Traducción de lenguaje natural a comandos de red.
+
+## Instalación y Uso
+
+1. Asegúrate de que tus focos sean compatibles con el protocolo CozyLife en el puerto 5555.
+2. Clona el repositorio:
+   ```bash
+   git clone https://github.com/rayarcoshorta/CozzyLife-sunset-sundownd-effect-included-.git
