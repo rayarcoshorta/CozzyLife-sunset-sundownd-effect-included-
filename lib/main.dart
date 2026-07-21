@@ -5,6 +5,9 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'bulb_background_service.dart';
 import 'dart:async';
 import 'sunrise_sunset_calculator.dart';
+import 'package:geolocator/geolocator.dart';
+import 'package:speech_to_text/speech_to_text.dart';
+import 'voice_command_parser.dart'; 
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -174,6 +177,10 @@ class _HomeScreenState extends State<HomeScreen> {
   final Map<String, Timer> _activeEffectTimers = {};
   Timer? _schedulerTimer;
   final Set<String> _firedToday = {};
+  //speach funciones
+  final SpeechToText _speech = SpeechToText();
+  bool _isListening = false;
+  String _lastWords = "";
 
   @override
   void initState() {
@@ -181,6 +188,7 @@ class _HomeScreenState extends State<HomeScreen> {
     _loadBulbs();
     _loadLocation();
     _startScheduler();
+    _initSpeech();
   }
 
   @override
@@ -189,16 +197,124 @@ class _HomeScreenState extends State<HomeScreen> {
     _schedulerTimer?.cancel();
     super.dispose();
   }
+  //Funciones de escucha
+   void _initSpeech() async {
+    await _speech.initialize();
+  }
 
+  void _listen() async {
+    if (!_isListening) {
+      bool available = await _speech.initialize(
+        onStatus: (val) => print('Voz Status: $val'),
+        onError: (val) => print('Voz Error: $val'),
+      );
+      if (available) {
+        setState(() => _isListening = true);
+        _speech.listen(
+          localeId: 'es_MX', // Forzamos español de México
+          onResult: (val) => setState(() {
+            _lastWords = val.recognizedWords;
+            if (val.finalResult) {
+              _isListening = false;
+              _handleVoiceCommand(_lastWords);
+            }
+          }),
+        );
+      }
+    } else {
+      setState(() => _isListening = false);
+      _speech.stop();
+    }
+  }
+
+
+  void _handleVoiceCommand(String text) {
+    final command = parseVoiceCommand(text);
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text('Comando: "$text"'), duration: const Duration(seconds: 2))
+    );
+
+    if (command.intent == VoiceIntent.unknown) return;
+
+    List<int> targetIndices = command.bulbIndex != null 
+        ? [command.bulbIndex!] 
+        : List.generate(bulbs.length, (index) => index);
+
+    for (var index in targetIndices) {
+      if (index >= bulbs.length) continue;
+      
+      switch (command.intent) {
+        case VoiceIntent.turnOn:
+          _toggleBulb(index, true);
+          break;
+        case VoiceIntent.turnOff:
+          _toggleBulb(index, false);
+          break;
+        case VoiceIntent.setBrightness:
+          if (command.value != null) {
+            _changeBrightness(index, command.value!.toDouble());
+          }
+          break;
+        default:
+          break;
+      }
+    }
+  }
+  //
+  Future<void> _determinePosition() async {
+    bool serviceEnabled;
+    LocationPermission permission;
+
+    // 1. ¿Está el GPS prendido?
+    serviceEnabled = await Geolocator.isLocationServiceEnabled();
+    if (!serviceEnabled) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Por favor, activa el GPS')),
+      );
+      return;
+    }
+
+    // 2. Pedir permisos
+    permission = await Geolocator.checkPermission();
+    if (permission == LocationPermission.denied) {
+      permission = await Geolocator.requestPermission();
+      if (permission == LocationPermission.denied) return;
+    }
+    
+    if (permission == LocationPermission.deniedForever) return;
+
+    // 3. Obtener ubicación
+    Position position = await Geolocator.getCurrentPosition();
+    
+    // 4. Guardar y actualizar estado
+    await _saveLocation(position.latitude, position.longitude);
+    
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text('Ubicación actualizada: ${position.latitude.toStringAsFixed(2)}, ${position.longitude.toStringAsFixed(2)}')),
+    );
+  }
   // --- Lógica de Control de Efectos ---
-  void _runEffect(int index, {required bool isSunset}) async {
+    void _runEffect(int index, {required bool isSunset}) async {
     final bulb = bulbs[index];
     final config = isSunset ? bulb.sunset : bulb.sunrise;
     if (!config.enabled) return;
 
+    // 1. BLOQUEO: Cancelar el efecto opuesto si está activo
+    final oppositeKey = '${bulb.ip}_${isSunset ? 'sunrise' : 'sunset'}';
+    if (_activeEffectTimers.containsKey(oppositeKey)) {
+      _activeEffectTimers[oppositeKey]?.cancel();
+      _activeEffectTimers.remove(oppositeKey);
+      print("Efecto opuesto cancelado para evitar cruce");
+    }
+
+    // 2. INICIO FORZADO: Asegurar que arranque con los valores de la config
     if (!bulb.isOn) {
-      setState(() => bulb.isOn = true);
-      await bulb.client.setPower(true);
+      setState(() {
+        bulb.isOn = true;
+        bulb.brightness = config.startBrightness.clamp(50, 1000);
+        bulb.colorTemp = config.startColorTemp;
+      });
+      await bulb.client.setTempAndBrightness(bulb.colorTemp, bulb.brightness);
       await Future.delayed(const Duration(milliseconds: 800));
     }
 
@@ -207,11 +323,15 @@ class _HomeScreenState extends State<HomeScreen> {
     final now = DateTime.now();
     DateTime start, end;
 
+    // 3. DETERMINAR HORARIOS (Manual o Auto por GPS)
     if (config.mode == 'manual') {
       start = DateTime(now.year, now.month, now.day, config.manualStartMinutes ~/ 60, config.manualStartMinutes % 60);
       end = DateTime(now.year, now.month, now.day, config.manualEndMinutes ~/ 60, config.manualEndMinutes % 60);
     } else {
-      if (_lat == null || _lon == null) return;
+      if (_lat == null || _lon == null) {
+        if (mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Ubicación no configurada para modo Auto.')));
+        return;
+      }
       final sun = calculateSunTimes(date: now, latitude: _lat!, longitude: _lon!);
       start = isSunset ? sun.sunset : sun.civilDawn;
       end = isSunset ? sun.civilDusk : sun.sunrise;
@@ -223,24 +343,40 @@ class _HomeScreenState extends State<HomeScreen> {
     final key = '${bulb.ip}_${isSunset ? 'sunset' : 'sunrise'}';
     _activeEffectTimers[key]?.cancel();
 
-    final int stepSeconds = 10;
-    final int totalSteps = (totalDuration.inSeconds / stepSeconds).round().clamp(1, 100000);
+    final int stepSeconds = 10; // Cada cuánto tiempo mandamos un ajuste
+    final int totalSteps = (totalDuration.inSeconds / stepSeconds).round().clamp(1, 10000);
+    
+    // Calcular en qué paso deberíamos estar si el efecto ya empezó
     int currentStep = now.difference(start).inSeconds ~/ stepSeconds;
     currentStep = currentStep.clamp(0, totalSteps);
 
+    // 4. TEMPORIZADOR DE PROGRESIÓN
     _activeEffectTimers[key] = Timer.periodic(Duration(seconds: stepSeconds), (timer) async {
       currentStep++;
       double progress = currentStep / totalSteps;
+      
+      // Cálculo lineal de brillo y temperatura
       int currentB = (startingB + (config.endBrightness - startingB) * progress).round().clamp(50, 1000);
       int currentT = (startingT + (config.endColorTemp - startingT) * progress).round().clamp(0, 1000);
 
       if (mounted) {
-        setState(() { bulb.brightness = currentB; bulb.colorTemp = currentT; bulb.mode = 'white'; });
+        setState(() { 
+          bulb.brightness = currentB; 
+          bulb.colorTemp = currentT; 
+          bulb.mode = 'white'; 
+        });
       }
+      
       await bulb.client.setTempAndBrightness(currentT, currentB);
-      if (currentStep >= totalSteps) { timer.cancel(); _activeEffectTimers.remove(key); _saveBulbs(); }
+      
+      if (currentStep >= totalSteps) { 
+        timer.cancel(); 
+        _activeEffectTimers.remove(key); 
+        _saveBulbs(); 
+      }
     });
   }
+
 
   // --- UI y Diálogos ---
   Future<void> _showEffectDialog(int index, {required bool isSunset}) async {
@@ -256,7 +392,7 @@ class _HomeScreenState extends State<HomeScreen> {
       barrierDismissible: false,
       builder: (ctx) => StatefulBuilder(
         builder: (ctx, setLocal) => AlertDialog(
-          title: Text(isSunset ? 'Atardecer (8 PM - 10 PM)' : 'Amanecer'),
+          title: Text(isSunset ? 'Atardecer' : 'Amanecer'),
           content: SizedBox(
             width: double.maxFinite,
             child: Column(
@@ -382,7 +518,21 @@ class _HomeScreenState extends State<HomeScreen> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: const Text('CozyLife Control'), actions: [IconButton(icon: const Icon(Icons.location_on), onPressed: _showLocationDialog)]),
+      appBar: AppBar(
+        title: const Text('CozyLife Control'), 
+        actions: [
+        // Botón para detectar ubicación automáticamente por GPS
+        IconButton(
+          icon: const Icon(Icons.my_location), 
+          onPressed: _determinePosition,
+        ),
+        // Botón para editar manual (el que ya tienes)
+        IconButton(
+          icon: const Icon(Icons.location_on), 
+          onPressed: _showLocationDialog,
+        ),
+  ]
+      ),
       body: ListView.builder(
         padding: const EdgeInsets.all(12),
         itemCount: bulbs.length,
@@ -415,7 +565,25 @@ class _HomeScreenState extends State<HomeScreen> {
           );
         },
       ),
-      floatingActionButton: FloatingActionButton(onPressed: _showAddBulbDialog, child: const Icon(Icons.add)),
+      floatingActionButton: Column(
+        mainAxisAlignment: MainAxisAlignment.end,
+        children: [
+          FloatingActionButton(
+            onPressed: _listen,
+            backgroundColor: _isListening ? Colors.red : Colors.amber,
+            heroTag: 'voiceBtn',
+            child: Icon(_isListening ? Icons.mic : Icons.mic_none),
+          ),
+          const SizedBox(height: 12),
+          FloatingActionButton(
+            onPressed: _showAddBulbDialog,
+            mini: true,
+            heroTag: 'addBtn',
+            child: const Icon(Icons.add),
+    
+          ),
+        ],
+      ),      
     );
   }
 
