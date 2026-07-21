@@ -20,11 +20,8 @@ CozyLife Control es una aplicación desarrollada en **Flutter** diseñada para e
 
 ## Estado del Proyecto
 
-Actualmente, la aplicación es totalmente funcional para el control manual, por horarios y por efectos solares. 
-
-**Próximos pasos en desarrollo:**
-- [ ] **Integración de Comandos de Voz:** Implementación de reconocimiento de voz determinista para control manos libres mediante `speech_to_text`.
-- [ ] **Optimización de Parser:** Traducción de lenguaje natural a comandos de red.
+Actualmente, la aplicación es totalmente funcional para el control manual y automatico, por horarios y por efectos solares. 
+Tiene ubicación GPS automático y efectos vinculados a los horarios, así como reconocimiento de voz.
 
 ## Instalación y Uso
 
